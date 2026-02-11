@@ -1,34 +1,35 @@
-// src/infrastructure/network/tcp_server.rs
-
 use std::io::Read;
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
 
 use crate::application::audio_pipeline::AudioPipeline;
 use crate::config::{FRAME_SIZE, PORT};
 use crate::protocol::frame::AudioFrame;
 
-pub fn run_server(pipeline: &mut AudioPipeline) -> std::io::Result<()> {
-    let listener = TcpListener::bind(("0.0.0.0", PORT))?;
+pub fn run_server(pipeline: Arc<Mutex<AudioPipeline>>) {
+    let listener =
+        TcpListener::bind(("0.0.0.0", PORT)).expect("Failed to bind TCP server");
+
     println!("Listening on port {}", PORT);
 
-    let (mut stream, addr) = listener.accept()?;
-    println!("Client connected: {}", addr);
+    for stream in listener.incoming() {
+        let mut stream = stream.expect("Failed to accept connection");
+        println!("Client connected: {}", stream.peer_addr().unwrap());
 
-    handle_client(&mut stream, pipeline)
-}
+        loop {
+            let mut buffer = [0u8; FRAME_SIZE];
 
-fn handle_client(
-    stream: &mut TcpStream,
-    pipeline: &mut AudioPipeline,
-) -> std::io::Result<()> {
-    loop {
-        let mut buffer = [0u8; FRAME_SIZE];
-
-        stream.read_exact(&mut buffer)?;
-
-        let frame = AudioFrame::new(buffer);
-        pipeline.push_frame(frame);
-
-        println!("Buffered frames: {}", pipeline.buffered_frames());
+            match stream.read_exact(&mut buffer) {
+                Ok(_) => {
+                    let frame = AudioFrame::new(buffer);
+                    let mut locked = pipeline.lock().unwrap();
+                    locked.push_frame(frame);
+                }
+                Err(_) => {
+                    println!("Client disconnected");
+                    break;
+                }
+            }
+        }
     }
 }
